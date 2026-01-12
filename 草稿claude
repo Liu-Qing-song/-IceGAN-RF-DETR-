@@ -1104,4 +1104,270 @@ IPM-based correction dramatically reduces thickness estimation errors caused by 
 
 These findings demonstrate that our framework provides a robust, accurate, and efficient solution for automated transmission line icing monitoring, with strong potential for practical deployment in power grid safety systems.
 
+##################################################
+非常抱歉让您久等了!现在我为您重新撰写"2. Methods"小节,采用更加系统化的结构和严谨的SCI学术写作风格:
+
+2. Methodology
+This section presents a comprehensive framework for automated transmission line icing monitoring, comprising three synergistic modules that address the critical challenges of data scarcity, slender target segmentation, and perspective-induced measurement errors. Figure 1 illustrates the overall architecture of the proposed system.
+The framework operates through a sequential three-stage pipeline:
+
+Data Augmentation Stage (IceGAN): To mitigate the severe shortage of extreme icing samples, we employ a generative adversarial network to synthesize high-fidelity icing images from normal transmission line photographs, thereby balancing the training distribution and enhancing model generalization.
+
+Detection and Segmentation Stage (Improved RF-DETR): To address the unique challenges of detecting slender conductors with extreme aspect ratios, we introduce an enhanced Transformer-based detector that preserves topological continuity and generates precise pixel-level segmentation masks through specialized attention mechanisms and multi-scale feature fusion.
+
+Geometric Correction and Evaluation Stage (IPM-based Measurement): To eliminate measurement errors caused by perspective distortion, we apply an Inverse Perspective Mapping algorithm that geometrically rectifies segmentation masks prior to thickness quantification, ensuring accurate alignment with international icing severity standards.
+
+
+The following subsections provide detailed descriptions of each module's architecture, mathematical formulations, and design rationale.
+
+2.1. IceGAN: Generative Model for Icing Image Synthesis
+2.1.1. Motivation and Design Principles
+Deep learning models typically require extensive labeled datasets to achieve robust generalization. However, acquiring images of transmission lines under extreme icing conditions is inherently challenging due to the infrequency and geographic dispersion of severe icing events. This data scarcity leads to severe class imbalance, where extreme icing samples constitute less than 8% of real-world datasets, resulting in model overfitting and poor performance on rare but critical scenarios.
+To address this fundamental limitation, we propose IceGAN, a domain-adaptive generative model designed to synthesize realistic icing images from readily available normal transmission line photographs. Unlike traditional data augmentation techniques (e.g., geometric transformations, color jittering) that merely perturb existing samples, IceGAN performs semantic-level domain translation, generating physically plausible ice accretion patterns that preserve the underlying conductor geometry while introducing diverse icing textures.
+2.1.2. Network Architecture
+IceGAN is constructed upon the CycleGAN-turbo framework, which offers two key advantages over conventional CycleGAN: (1) single-step inference through knowledge distillation from diffusion models, reducing computational overhead by approximately 10×, and (2) enhanced training stability through improved adversarial loss formulations. However, despite these architectural optimizations, the standard CycleGAN-turbo struggles to preserve high-frequency textural details when handling complex icing phenomena, often resulting in texture blurring or mode collapse.
+To overcome these limitations, we introduce two critical enhancements:
+Enhancement 1: Multi-scale Texture Extraction (MTE) Module
+Ice accretion exhibits hierarchical textural characteristics across multiple spatial scales: fine-grained crystalline structures at the micro-scale (1-5 mm), medium-scale roughness patterns (5-20 mm), and macro-scale morphological variations (>20 mm). Standard single-scale convolutional generators fail to capture this multi-granular nature, producing textures that appear either overly smooth or uniformly noisy.
+The MTE module addresses this challenge through parallel multi-branch convolutions with varying receptive fields:
+$$
+\text{MTE}(F) = \text{Concat}\left[C_{3\times3}(F), C_{5\times5}(F), C_{7\times7}(F)\right]
+$$
+where  $F$  denotes the input feature map, and  $C_{k\times k}$  represents a convolutional layer with kernel size  $k$ . The outputs from the three branches are concatenated along the channel dimension and subsequently fused through a  $1\times1$  convolution to maintain computational efficiency:
+$$
+F_{\text{MTE}} = \text{Conv}_{1\times1}\left(\text{MTE}(F)\right)
+$$
+This multi-scale architecture enables the generator to simultaneously capture:
+
+Fine details (3×3 kernels): Sharp edges, crystalline structures, and micro-roughness
+Medium features (5×5 kernels): Icing layer boundaries and textural patterns
+Coarse structures (7×7 kernels): Overall morphology and large-scale variations
+
+Enhancement 2: Icing-aware Perceptual Loss
+While adversarial loss ( $L_{\text{adv}}$ ) and cycle-consistency loss ( $L_{\text{cyc}}$ ) ensure domain transfer and content preservation, they treat all image regions uniformly, often generating unnecessary artifacts in background areas (sky, mountains, forests) while the ice texture on conductors remains unrealistic.
+To resolve this spatial ambiguity, we propose an Icing-aware Perceptual Loss ( $L_{\text{ice}}$ ) that spatially weights the perceptual discrepancy using a binary mask  $M$  that isolates transmission line regions:
+$$
+L_{\text{ice}} = \sum_{l=1}^{L} \lambda_l \left| \left[\phi_l(G(x)) - \phi_l(y)\right] \odot M \right|_2^2
+$$
+where:
+
+$G(x)$  denotes the generated icing image from source domain  $x$ 
+$y$  represents the target domain reference (real icing image)
+$\phi_l(\cdot)$  extracts feature maps from the  $l$ -th layer of a pre-trained VGG-16 network
+$M \in {0,1}^{H\times W}$  is the binary mask (1 for transmission line regions, 0 for background)
+$\lambda_l$  is the layer-specific weighting factor
+$\odot$  denotes element-wise multiplication
+
+The mask  $M$  is obtained through a lightweight segmentation network (e.g., DeepLabV3+) pre-trained on transmission line datasets. By constraining the perceptual loss to conductor regions, the generator focuses computational resources on synthesizing realistic ice textures while preserving background fidelity.
+Complete Loss Formulation
+The total training objective for IceGAN combines four complementary loss terms:
+$$
+L_{\text{total}} = L_{\text{adv}} + \lambda_{\text{cyc}} L_{\text{cyc}} + \lambda_{\text{id}} L_{\text{id}} + \lambda_{\text{ice}} L_{\text{ice}}
+$$
+where:
+
+Adversarial Loss ( $L_{\text{adv}}$ ): Ensures generated images are indistinguishable from real icing samples
+Cycle-Consistency Loss ( $L_{\text{cyc}}$ ): Preserves content integrity through forward-backward reconstruction
+Identity Loss ( $L_{\text{id}}$ ): Prevents unnecessary transformations when input already belongs to target domain
+Icing-aware Perceptual Loss ( $L_{\text{ice}}$ ): Enhances textural realism in conductor regions
+
+The weighting coefficients are empirically set to  $\lambda_{\text{cyc}} = 10$ ,  $\lambda_{\text{id}} = 5$ , and  $\lambda_{\text{ice}} = 2$  based on validation set performance.
+2.1.3. Training Strategy
+To ensure training stability and convergence, we adopt a two-stage training protocol:
+Stage 1 (Warm-up, 50 epochs): Train the base CycleGAN-turbo architecture with standard losses ( $L_{\text{adv}}$ ,  $L_{\text{cyc}}$ ,  $L_{\text{id}}$ ) to establish a coarse domain mapping.
+Stage 2 (Fine-tuning, 150 epochs): Activate the MTE module and  $L_{\text{ice}}$  to refine textural details. The learning rate is reduced by a factor of 0.5 at epochs 100 and 130 using a step decay schedule.
+Data augmentation during training includes random horizontal flipping (probability 0.5), rotation (±15°), and color jittering (brightness ±0.2, contrast ±0.2) to enhance model robustness.
+
+2.2. Improved RF-DETR: Slender Target Detection and Segmentation
+2.2.1. Baseline Architecture and Limitations
+To achieve precise detection of slender transmission lines, we adopt RF-DETR (Refined Feature Detection Transformer) as our baseline architecture. RF-DETR offers several advantages over conventional CNN-based detectors:
+
+Global Context Modeling: Transformer-based self-attention mechanisms capture long-range dependencies essential for detecting continuous linear structures spanning the entire image.
+
+End-to-End Training: Direct set prediction eliminates the need for hand-crafted anchor boxes and non-maximum suppression (NMS), simplifying the detection pipeline.
+
+Efficiency Optimization: Neural Architecture Search (NAS)-optimized backbone (DINOv2) achieves superior feature extraction with reduced computational overhead, enabling real-time inference on edge devices.
+
+
+However, the standard RF-DETR is designed for general object detection (COCO dataset) and lacks specific optimizations for the unique challenges of transmission line icing monitoring:
+
+Challenge 1: Extreme aspect ratios (length-to-width ratio >100:1) cause standard attention mechanisms to dilute spatial positional information, leading to fragmented detections.
+
+Challenge 2: Irregular icing boundaries with fuzzy edges result in imprecise segmentation masks when using standard cross-entropy loss.
+
+Challenge 3: Drastic scale variations (thin rime ice vs. heavy glaze ice) require adaptive multi-scale feature fusion beyond simple Feature Pyramid Networks (FPN).
+
+
+To address these limitations, we introduce three architectural enhancements: Icing Feature Enhancement Attention (IFEA), Mixed-scale Feature Pyramid (Mix-FPN), and Icing-specific Loss Functions.
+2.2.2. Icing Feature Enhancement Attention (IFEA)
+Motivation: Standard global average pooling (GAP) in attention mechanisms compresses spatial information into a single scalar per channel, suppressing the directional cues essential for localizing elongated objects. For slender transmission lines, preserving orientation information (vertical, horizontal, oblique) is critical for accurate detection.
+Design: IFEA introduces a direction-aware attention mechanism that decomposes global pooling into two coordinate-sensitive 1D encoding operations along the height ( $H$ ) and width ( $W$ ) dimensions:
+$$
+z_c^h(h) = \frac{1}{W} \sum_{w=0}^{W-1} F_c(h, w), \quad h \in [0, H-1]
+$$
+$$
+z_c^w(w) = \frac{1}{H} \sum_{h=0}^{H-1} F_c(h, w), \quad w \in [0, W-1]
+$$
+where  $F_c \in \mathbb{R}^{H \times W}$  denotes the feature map of the  $c$ -th channel, and  $z_c^h \in \mathbb{R}^{H}$ ,  $z_c^w \in \mathbb{R}^{W}$  are the direction-aware feature vectors.
+These 1D encodings are then processed through separate convolutional layers and sigmoid activations to generate attention weights:
+$$
+A^h = \sigma\left(\text{Conv}{1\times k}(z^h)\right), \quad A^w = \sigma\left(\text{Conv}{k\times 1}(z^w)\right)
+$$
+The final attention map is computed as the outer product of the two directional attention weights:
+$$
+A = A^h \otimes A^w
+$$
+where  $\otimes$  denotes the outer product operation. The enhanced feature map is obtained through element-wise multiplication:
+$$
+F_{\text{IFEA}} = F \odot A
+$$
+Key Advantage: Unlike standard GAP that produces a single global descriptor, IFEA preserves long-range dependencies along one spatial axis while retaining precise positional information along the other. This enables the network to effectively encode the orientation, span, and continuity of transmission lines, significantly reducing missed detections of oblique or vertical wires in complex backgrounds.
+2.2.3. Mixed-scale Feature Pyramid (Mix-FPN)
+Motivation: Icing thickness varies drastically across different scenarios, ranging from thin rime ice (1-5 mm, requiring high-resolution texture features) to heavy glaze ice (>30 mm, requiring high-level semantic features). The standard RF-DETR utilizes a simple linear projector for feature multi-scaling, which fails to adaptively balance fine-grained details and coarse semantic information.
+Design: We upgrade the feature pyramid to a Mixed-scale Feature Pyramid (Mix-FPN) with bidirectional feature fusion and adaptive weighting:
+Bidirectional Fusion Pathways:
+
+Top-down Pathway: Upsamples semantic-rich features from deep layers ( $P_5, P_4$ ) to enhance localization of large ice loads:
+
+$$
+P_i^{\text{td}} = \text{Upsample}(P_{i+1}) + \text{Conv}_{3\times3}(P_i)
+$$
+
+Bottom-up Pathway: Transmits fine-grained textural details from shallow layers ( $P_2, P_3$ ) to refine boundary definition of thin ice:
+
+$$
+P_i^{\text{bu}} = \text{Downsample}(P_{i-1}^{\text{td}}) + \text{Conv}_{3\times3}(P_i^{\text{td}})
+$$
+Adaptive Weighting Mechanism:
+To dynamically balance semantic vs. textural information based on icing severity, we introduce learnable weighting scalars at each fusion node:
+$$
+P_i^{\text{fused}} = w_i^{\text{td}} \cdot P_i^{\text{td}} + w_i^{\text{bu}} \cdot P_i^{\text{bu}}
+$$
+where  $w_i^{\text{td}}$  and  $w_i^{\text{bu}}$  are learnable parameters normalized through softmax:
+$$
+w_i^{\text{td}} = \frac{e^{\alpha_i^{\text{td}}}}{e^{\alpha_i^{\text{td}}} + e^{\alpha_i^{\text{bu}}}}, \quad w_i^{\text{bu}} = \frac{e^{\alpha_i^{\text{bu}}}}{e^{\alpha_i^{\text{td}}} + e^{\alpha_i^{\text{bu}}}}
+$$
+This adaptive mechanism allows the network to automatically adjust feature importance: for thin rime ice, the model emphasizes high-resolution features ( $w^{\text{bu}} > w^{\text{td}}$ ); for heavy glaze ice, it prioritizes semantic features ( $w^{\text{td}} > w^{\text{bu}}$ ).
+2.2.4. Icing-specific Loss Functions
+Challenge: Standard cross-entropy loss treats all pixels equally, leading to blurred predictions at the ice-background interface and "sawtooth" artifacts along conductor edges. For thickness estimation, edge precision directly correlates with measurement accuracy.
+Solution: We introduce two complementary loss terms:
+(1) Boundary-sensitive Loss ( $L_{\text{boundary}}$ )
+To sharpen segmentation edges, we apply higher weights to pixels near object boundaries:
+$$
+L_{\text{boundary}} = -\sum_{i,j} w_{ij} \left[ y_{ij} \log(\hat{y}{ij}) + (1-y{ij}) \log(1-\hat{y}_{ij}) \right]
+$$
+where the boundary weight  $w_{ij}$  is computed using morphological operations:
+$$
+w_{ij} = 1 + \beta \cdot \mathbb{1}_{\text{boundary}}(i,j)
+$$
+Here,  $\mathbb{1}_{\text{boundary}}(i,j) = 1$  if pixel  $(i,j)$  lies within a  $d$ -pixel distance from the object boundary (detected via Canny edge detection), and  $\beta = 5$  is the boundary emphasis factor.
+(2) Shape Constraint Loss ( $L_{\text{shape}}$ )
+To enforce topological continuity and prevent fragmented detections, we penalize disconnected components:
+$$
+L_{\text{shape}} = \lambda_{\text{conn}} \cdot N_{\text{components}} + \lambda_{\text{smooth}} \cdot \text{TV}(\hat{y})
+$$
+where:
+
+$N_{\text{components}}$  is the number of disconnected components in the predicted mask
+$\text{TV}(\hat{y}) = \sum_{i,j} \left| \hat{y}{i+1,j} - \hat{y}{i,j} \right| + \left| \hat{y}{i,j+1} - \hat{y}{i,j} \right|$  is the total variation term promoting spatial smoothness
+
+Complete Detection Loss:
+$$
+L_{\text{detect}} = L_{\text{cls}} + \lambda_{\text{box}} L_{\text{box}} + \lambda_{\text{mask}} L_{\text{mask}} + \lambda_{\text{bd}} L_{\text{boundary}} + \lambda_{\text{sh}} L_{\text{shape}}
+$$
+where  $L_{\text{cls}}$ ,  $L_{\text{box}}$ , and  $L_{\text{mask}}$  are the standard classification, bounding box regression, and mask prediction losses from DETR, with weighting coefficients  $\lambda_{\text{box}} = 5$ ,  $\lambda_{\text{mask}} = 2$ ,  $\lambda_{\text{bd}} = 3$ ,  $\lambda_{\text{sh}} = 1$ .
+
+2.3. IPM-based Icing Thickness Evaluation
+2.3.1. Problem Formulation
+After obtaining precise segmentation masks from RF-DETR, the next challenge is to quantify icing severity through thickness estimation. The standard approach applies the Pixel Similarity Principle, which assumes that the ratio of pixel areas is proportional to the ratio of physical areas:
+$$
+\frac{A_{\text{iced}}}{A_{\text{conductor}}} = \frac{S_{\text{iced}}}{S_{\text{conductor}}}
+$$
+where  $A$  denotes pixel area and  $S$  denotes physical area. The equivalent ice thickness  $t_{\text{ice}}$  can then be derived from the area ratio assuming cylindrical geometry:
+$$
+t_{\text{ice}} = \frac{d}{2} \left( \sqrt{\frac{A_{\text{iced}}}{A_{\text{conductor}}}} - 1 \right)
+$$
+where  $d$  is the conductor diameter.
+Critical Limitation: This formulation assumes orthogonal projection, where the camera optical axis is perpendicular to the transmission line. However, in real-world monitoring scenarios, cameras are typically mounted at oblique angles (15°-60°) due to terrain constraints and safety considerations. This introduces perspective distortion—the "near-big-far-small" phenomenon—where objects closer to the camera appear disproportionately larger in the image plane.
+As demonstrated in our experiments (Section 3.4.2), direct pixel-based calculation without geometric correction yields relative errors exceeding 25% at inclination angles of 45°, rendering measurements unsuitable for operational icing classification.
+2.3.2. Inverse Perspective Mapping (IPM) Algorithm
+To eliminate perspective distortion, we introduce an Inverse Perspective Mapping (IPM) algorithm that geometrically rectifies the image prior to thickness calculation, transforming the perspective view into an orthogonal (bird's-eye) view.
+Step 1: Vanishing Point Detection
+For parallel transmission lines, perspective projection causes them to converge toward a vanishing point  $V = (v_x, v_y)$  in the image plane. We detect this vanishing point using a robust RANSAC-based line fitting algorithm:
+
+Extract edge pixels from the segmentation mask using Canny edge detection
+Fit multiple line segments using Hough transform
+Compute intersection points of all line pairs
+Apply RANSAC to identify the most consistent vanishing point
+
+Step 2: Homography Estimation
+Given the vanishing point  $V$  and assuming the transmission lines lie in a plane parallel to the ground, we compute the homography matrix  $H \in \mathbb{R}^{3\times3}$  that maps the perspective view to an orthogonal view:
+$$
+H = K \cdot R \cdot K^{-1}
+$$
+where:
+
+$K$  is the camera intrinsic matrix (calibrated offline or estimated from vanishing points)
+$R$  is the rotation matrix aligning the image plane with the ground plane
+
+The rotation matrix  $R$  is parameterized by the tilt angle  $\theta$  (computed from the vanishing point position):
+$$
+R = \begin{bmatrix}
+1 &amp; 0 &amp; 0 \
+0 &amp; \cos\theta &amp; -\sin\theta \
+0 &amp; \sin\theta &amp; \cos\theta
+\end{bmatrix}
+$$
+Step 3: Image Rectification
+We apply the homography transformation to warp the original image  $I$  and segmentation mask  $M$  to the rectified view:
+$$
+I_{\text{rect}} = H \cdot I, \quad M_{\text{rect}} = H \cdot M
+$$
+The transformation is implemented using bilinear interpolation to minimize aliasing artifacts.
+Step 4: Corrected Thickness Calculation
+After rectification, the pixel-to-physical mapping becomes linear and uniform across the image. We apply the Pixel Similarity Principle to the rectified mask  $M_{\text{rect}}$  to compute the corrected thickness:
+$$
+t_{\text{ice}}^{\text{corrected}} = \frac{d}{2} \left( \sqrt{\frac{A_{\text{iced}}^{\text{rect}}}{A_{\text{conductor}}^{\text{rect}}}} - 1 \right)
+$$
+where  $A^{\text{rect}}$  denotes pixel areas measured in the rectified image.
+Step 5: Icing Severity Classification
+The corrected thickness is classified into standardized severity levels according to international icing standards (IEC 60826):
+
+Light Icing:  $t_{\text{ice}} < 5$  mm
+Medium Icing:  $5 \leq t_{\text{ice}} < 10$  mm  
+Heavy Icing:  $t_{\text{ice}} \geq 10$  mm
+
+This classification triggers appropriate maintenance actions: monitoring (light), inspection (medium), or emergency de-icing (heavy).
+2.3.3. Computational Complexity
+The IPM algorithm introduces minimal computational overhead:
+
+Vanishing point detection: O( $N \log N$ ), where  $N$  is the number of edge pixels
+Homography estimation: O(1) (closed-form solution)
+Image warping: O( $HW$ ), where  $H \times W$  is the image resolution
+
+Total processing time is approximately 8 ms per image on a standard CPU, representing less than 15% of the end-to-end pipeline latency.
+
+2.4. End-to-End Framework Integration
+The complete monitoring system integrates the three modules into a unified pipeline:
+Input: Raw transmission line image  $I_{\text{raw}}$ 
+Stage 1 (Offline - Data Preparation):
+
+Generate synthetic icing samples using IceGAN
+Construct balanced training dataset (real + synthetic)
+
+Stage 2 (Online - Detection):
+
+Feed  $I_{\text{raw}}$  into Improved RF-DETR
+Obtain segmentation mask  $M_{\text{pred}}$  and bounding box  $B_{\text{pred}}$
+
+Stage 3 (Online - Measurement):
+
+Detect vanishing point from  $M_{\text{pred}}$ 
+Compute homography matrix  $H$ 
+Rectify mask:  $M_{\text{rect}} = H \cdot M_{\text{pred}}$ 
+Calculate corrected thickness  $t_{\text{ice}}^{\text{corrected}}$ 
+Classify icing severity
+
+Output: Icing severity level + quantitative thickness measurement + visualization
+The entire online pipeline (Stages 2-3) operates at approximately 22 FPS on an NVIDIA RTX 3090 GPU, satisfying real-time monitoring requirements for both drone-based and fixed-camera inspection systems.
 
